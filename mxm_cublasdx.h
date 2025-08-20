@@ -201,8 +201,9 @@ namespace mra {
             return cublasdx::make_tensor(c+((i*max_mn)*N), GEMM::get_layout_gmem_c());
           };
 
-          auto store_c = [&](auto& c_shared_tensor) {
+          auto store_c = [&]() {
 #if MRA_CUBLASDX_BLOCK_C
+            auto c_shared_tensor   = cublasdx::make_tensor(smem_c,   GET_SHARED_LAYOUT(GEMM, c));
             __syncthreads(); // make sure prior computations are done
             auto c_global_tensor = make_c_global_tensor(i-1);
             cublasdx::copy<GEMM, alignment::c>(c_shared_tensor, c_global_tensor);
@@ -211,6 +212,12 @@ namespace mra {
           for (i = 0; i < num_iter; i++) {
             // Make global memory tensors
             auto a_global_tensor = cublasdx::make_tensor(a+(i*max_mn),     GEMM::get_layout_gmem_a(cute::Int<M>{}));
+          auto a_shared_tensor   = cublasdx::make_tensor(smem_a,   GET_SHARED_LAYOUT(GEMM, a));
+          auto a_shared_tensor_n = cublasdx::make_tensor(smem_a_n, GET_SHARED_LAYOUT(GEMM, a));
+
+          auto c_shared_tensor   = cublasdx::make_tensor(smem_c,   GET_SHARED_LAYOUT(GEMM, c));
+          auto c_shared_tensor_n = cublasdx::make_tensor(smem_c_n, GET_SHARED_LAYOUT(GEMM, c));
+
             PRINT_TENSOR_TYPE(a_global_tensor);
             PRINT_TENSOR_TYPE(a_shared_tensor);
             PRINT_TENSOR_TYPE(make_c_global_tensor(i));
@@ -234,7 +241,7 @@ namespace mra {
                                         /* store prior iteration's result */
                                         if (i > 0) {
                                           //if (is_team_lead()) printf("Storing block %d\n", i-1);
-                                          store_c(c_shared_tensor_n);
+                                          store_c();
                                         }
                                         /* prefetch into shared memory */
                                         if ((i+1) < num_iter) {
@@ -243,11 +250,27 @@ namespace mra {
                                           cublasdx::copy<GEMM, alignment::a>(a_global_tensor, a_shared_tensor_n);
                                         }
                                       });
-            std::swap(a_shared_tensor, a_shared_tensor_n);
-            std::swap(c_shared_tensor, c_shared_tensor_n);
+	    auto tmp_a = smem_a;
+	    smem_a = smem_a_n;
+	    smem_a_n = tmp_a;
+	    auto tmp_c = smem_c;
+	    smem_c = smem_c_n;
+	    smem_c_n = tmp_c;
+
+#if 0
+            auto tmp_a = a_shared_tensor;
+            a_shared_tensor = a_shared_tensor_n;
+            a_shared_tensor_n = tmp_a;
+            auto tmp_b = c_shared_tensor;
+            c_shared_tensor = c_shared_tensor_n;
+            c_shared_tensor_n = tmp_b;
+#else
+            //std::swap(a_shared_tensor, a_shared_tensor_n);
+            //std::swap(c_shared_tensor, c_shared_tensor_n);
+#endif // 0
           }
           /* store the last block of C */
-          store_c(c_shared_tensor_n);
+          store_c();
         }
 
         /* handle remainder */
