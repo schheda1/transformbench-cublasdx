@@ -19,13 +19,19 @@ __device__ void transform(
   constexpr const int ndim = 3; // fixed for benchmark
   const T* pc = c;
   T *t0=workspace, *t1=result;
-  std::swap(t0,t1);
+  //std::swap(t0,t1);
+    auto tmp = t0;
+    t0 = t1;
+    t1 = tmp;
   const int dimj = K;
   int dimi = dimj*dimj;
   mra::mTxmq(dimi, dimj, dimj, t0, t, pc);
   for (int n=1; n<ndim; ++n) {
     mra::mTxmq(dimi, dimj, dimj, t1, t0, pc);
-    std::swap(t0,t1);
+    auto tmp = t0;
+    t0 = t1;
+    t1 = tmp;
+    //std::swap(t0,t1);
   }
   /* no need to synchronize here, mTxmq synchronizes */
 }
