@@ -12,7 +12,7 @@
 
 #define MRA_CUBLASDX_BLOCK_C 0
 
-#if 1 || __has_include(<cublasdx.hpp>)
+#if __has_include(<cublasdx.hpp>)
 
 #define MRA_HAVE_CUBLASDX 1
 

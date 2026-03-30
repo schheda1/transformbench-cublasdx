@@ -13,6 +13,15 @@
 
 using Dim3 = dim3;
 
+#ifdef MRA_HAVE_CUDA
+
+tyedef Stream cudaStream_t;
+#define SYNC_STREAM(cudaStream) cudaStreamSynchronize(cudaStream)
+#define CREATE_STREAM(cudaStream) cudaStreamCreateWithFlags(&cudaStream, cudaStreamNonBlocking)
+
+#define MALLOC(ptr, size) cudaMalloc(ptr, size)
+#define FREE(ptr) cudaFree(ptr)
+
 #define CALL_KERNEL(name, block, thread, shared, stream, args)                          \
   do {                                                                                  \
     name<<<block, thread, shared, stream>>> args ;                                      \
@@ -44,6 +53,50 @@ using Dim3 = dim3;
 #else  // __CUDA_ARCH__
 #define THROW(s) do { throw std::runtime_error(s); } while(0)
 #endif // __CUDA_ARCH__
+
+#elif defined(MRA_HAVE_HIP)
+
+tyedef Stream hipStream_t;
+#define SYNC_STREAM(hipStream) hipStreamSynchronize(hipStream)
+#define CREATE_STREAM(hipStream) hipStreamCreateWithFlags(&hipStream, hipStreamNonBlocking)
+
+#define MALLOC(ptr, size) hipMalloc(ptr, size)
+#define FREE(ptr) hipFree(ptr)
+
+#define CALL_KERNEL(name, block, thread, shared, stream, args)                          \
+  do {                                                                                  \
+    name<<<block, thread, shared, stream>>> args ;                                      \
+    if (hipPeekAtLastError() != hipSuccess) {                                         \
+      std::cout << "kernel submission failed with " << shared << "B smem at "           \
+                << __FILE__ << ":" << __LINE__ << ": "                                  \
+                << hipGetErrorString(hipPeekAtLastError()) << std::endl;              \
+      throw std::runtime_error("kernel configuration failed");                          \
+    }                                                                                   \
+  } while (0)
+
+#define CONFIGURE_KERNEL(name, shared)                                                  \
+  do {                                                                                  \
+    static int smem_size_config = 0;                                                    \
+    if (smem_size_config < shared) {                                                    \
+      hipFuncSetAttribute(name, hipFuncAttributeMaxDynamicSharedMemorySize, shared);  \
+      if (hipPeekAtLastError() != hipSuccess) {                                       \
+        std::cout << "kernel configuration failed with " << shared << "B smem at "      \
+                  << __FILE__ << ":" << __LINE__ << ": "                                \
+                  << hipGetErrorString(hipPeekAtLastError()) << std::endl;            \
+        throw std::runtime_error("kernel configuration failed");                        \
+      }                                                                                 \
+    }                                                                                   \
+  } while (0)
+
+
+#if defined(__CUDA_ARCH__)
+// TODO: Not sure how to throw in AMD kernels
+#define THROW(s) do { std::printf(s); } while(0)
+#else  // __CUDA_ARCH__
+#define THROW(s) do { throw std::runtime_error(s); } while(0)
+#endif // __CUDA_ARCH__
+
+#endif // MRA_HAVE_CUDA
 
 constexpr inline Dim3 max_thread_dims(int K) {
 //  int x = 32;

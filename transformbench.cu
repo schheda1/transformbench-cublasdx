@@ -10,15 +10,15 @@
 template<typename T>
 void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, bool use_mTxm) {
 
-  cudaStream_t streams[4]; // PaRSEC uses 4 streams by default
+  Stream streams[4]; // PaRSEC uses 4 streams by default
   T* A, *B, *C, *workspace;
-  cudaMalloc(&A, nfuncs * K * K * K * sizeof(T)); // N x KxKxK tensors
-  cudaMalloc(&B, K * K * sizeof(T)); // KxK matrix
-  cudaMalloc(&C, nfuncs * K * K * K * sizeof(T)); // N x KxKxK tensors
-  cudaMalloc(&workspace, nblocks * K * K * K * sizeof(T)); // N x KxKxK tensors
+  MALLOC(&A, nfuncs * K * K * K * sizeof(T)); // N x KxKxK tensors
+  MALLOC(&B, K * K * sizeof(T)); // KxK matrix
+  MALLOC(&C, nfuncs * K * K * K * sizeof(T)); // N x KxKxK tensors
+  MALLOC(&workspace, nblocks * K * K * K * sizeof(T)); // N x KxKxK tensors
 
   for (int i = 0; i < 4; ++i) {
-    cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
+    CREATE_STREAM(&streams[i]);
   }
 
   std::chrono::time_point<std::chrono::high_resolution_clock> beg, end;
@@ -33,7 +33,7 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, bool
       }
     }
     for (int t = 0; t < 4; ++t) {
-      cudaStreamSynchronize(streams[t]);
+      SYNC_STREAM(streams[t]);
     }
     end = std::chrono::high_resolution_clock::now();
 
@@ -54,10 +54,10 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, bool
   }
 
   // cleanup
-  cudaFree(A);
-  cudaFree(B);
-  cudaFree(C);
-  cudaFree(workspace);
+  FREE(A);
+  FREE(B);
+  FREE(C);
+  FREE(workspace);
 }
 
 int main(int argc, char **argv) {

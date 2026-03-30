@@ -64,7 +64,7 @@ inline int transform_shmem_size(int K) {
 template<typename T>
 inline void submit_transform_bench(int nfuncs, int nblocks, int K,
                                   const T* A, const T* B, T* C, T* workspace,
-                                  cudaStream_t stream)
+                                  Stream stream)
 {
   Dim3 thread_dims = mra::mTxmq_blockdim<T>(K);
   assert(block_size(thread_dims) <= MAX_THREADS_PER_BLOCK);
