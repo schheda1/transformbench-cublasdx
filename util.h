@@ -55,11 +55,11 @@ typedef cudaStream_t Stream;
 using Dim3 = dim3;
 
 typedef hipStream_t Stream;
-#define SYNC_STREAM(hipStream) hipStreamSynchronize(hipStream)
-#define CREATE_STREAM(hipStream) hipStreamCreateWithFlags(hipStream, hipStreamNonBlocking)
+#define SYNC_STREAM(hipStream) (void)hipStreamSynchronize(hipStream)
+#define CREATE_STREAM(hipStream) (void)hipStreamCreateWithFlags(hipStream, hipStreamNonBlocking)
 
-#define MALLOC(ptr, size) hipMalloc(ptr, size)
-#define FREE(ptr) hipFree(ptr)
+#define MALLOC(ptr, size) (void)hipMalloc(ptr, size)
+#define FREE(ptr) (void)hipFree(ptr)
 
 #define CALL_KERNEL(name, block, thread, shared, stream, args)                          \
   do {                                                                                  \
@@ -77,7 +77,7 @@ typedef hipStream_t Stream;
     static int smem_size_config = 0;                                                    \
     if (smem_size_config < shared) {                                                    \
       const void* func_ptr = reinterpret_cast<void*>(name);                             \
-      hipFuncSetAttribute(func_ptr, hipFuncAttributeMaxDynamicSharedMemorySize, shared);  \
+      (void)hipFuncSetAttribute(func_ptr, hipFuncAttributeMaxDynamicSharedMemorySize, shared);  \
       if (hipPeekAtLastError() != hipSuccess) {                                       \
         std::cout << "kernel configuration failed with " << shared << "B smem at "      \
                   << __FILE__ << ":" << __LINE__ << ": "                                \
