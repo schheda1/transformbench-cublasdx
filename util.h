@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <cuda_runtime.h>
 
 /**
  * A bunch of helper macros, options parsign, etc.
@@ -11,9 +10,11 @@
 
 #define LAUNCH_BOUNDS(__NT, __NB) __launch_bounds__(__NT, __NB)
 
-using Dim3 = dim3;
 
 #ifdef MRA_HAVE_CUDA
+#include <cuda_runtime.h>
+
+using Dim3 = dim3;
 
 tyedef Stream cudaStream_t;
 #define SYNC_STREAM(cudaStream) cudaStreamSynchronize(cudaStream)
@@ -55,6 +56,10 @@ tyedef Stream cudaStream_t;
 #endif // __CUDA_ARCH__
 
 #elif defined(MRA_HAVE_HIP)
+
+#include <hip/hip_runtime.h>
+
+using Dim3 = dim3;
 
 tyedef Stream hipStream_t;
 #define SYNC_STREAM(hipStream) hipStreamSynchronize(hipStream)
