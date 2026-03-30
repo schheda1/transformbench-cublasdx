@@ -15,6 +15,8 @@
  * that would be required to store the result of the GEMM.
  **********************************************************************************/
 
+#if __has_include(<cublasdx.hpp>)
+
 template <typename T, int K>
 __forceinline__ __device__
 void transform_cublasdx_k(
@@ -202,5 +204,15 @@ void submit_transform_cublasdx_bench(int nfuncs, int nblocks, int K,
   }
 }
 
+#else
+
+template<typename T>
+void submit_transform_cublasdx_bench(int nfuncs, int nblocks, int K,
+                                    const T* A, const T* B, T* C, T* workspace,
+                                    cudaStream_t stream) {
+  std::printf("CUBLASdx not available, cannot run benchmark\n");
+}
+
+#endif // __has_include(<cublasdx.hpp>)
 
 #endif // HAVE_TRANSFORM_CUBLASDX_H
