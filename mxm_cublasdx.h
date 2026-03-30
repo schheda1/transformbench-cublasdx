@@ -386,10 +386,6 @@ namespace mra {
 
 } // namespace mra
 
-#else
-
-#error "cublasdx not found, please install cublasdx and set CUDADIR to the correct path"
-
 #endif // __has_include(<cublasdx.hpp>)
 
 #endif // MRA_OPS_MXM_CUBLASDX_H
