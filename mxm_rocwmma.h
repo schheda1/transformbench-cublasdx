@@ -29,11 +29,11 @@
  */
 
 #include <rocwmma/rocwmma.hpp>
-#include "mra/misc/types.h"
+#include "util.h"
 
 #ifdef __HIP_DEVICE_COMPILE__
 
-namespace mra::detail {
+namespace detail {
 
   // WMMA fragment tile size (M × N × K_TILE) on AMD hardware.
   // M and N are always 16; K_TILE depends on precision.
@@ -189,7 +189,7 @@ namespace mra::detail {
     return (smem_b + smem_c) * sizeof(T);
   }
 
-} // namespace mra::detail
+} // namespace detail
 
 
 // ── Public interface ───────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ namespace mra::detail {
  * other values (callers should fall back to a reference implementation for those).
  */
 template<typename aT, typename bT, typename cT>
-__device__ void mTxmq(mra::size_type dimi, mra::size_type dimj, mra::size_type dimk,
+__device__ void mTxmq(size_type dimi, size_type dimj, size_type dimk,
                       cT* __restrict__ c, const aT* a, const bT* b)
 {
   static_assert(std::is_same_v<aT, bT> && std::is_same_v<bT, cT>,
@@ -217,10 +217,10 @@ __device__ void mTxmq(mra::size_type dimi, mra::size_type dimj, mra::size_type d
 
   if (dimi == dimk * dimk && dimj == dimk) {
     switch (dimk) {
-      case  4: mra::detail::mTxmq_rocwmma_core< 4, cT>(c, a, b, smem); break;
-      case  8: mra::detail::mTxmq_rocwmma_core< 8, cT>(c, a, b, smem); break;
-      case 12: mra::detail::mTxmq_rocwmma_core<12, cT>(c, a, b, smem); break;
-      case 16: mra::detail::mTxmq_rocwmma_core<16, cT>(c, a, b, smem); break;
+      case  4: detail::mTxmq_rocwmma_core< 4, cT>(c, a, b, smem); break;
+      case  8: detail::mTxmq_rocwmma_core< 8, cT>(c, a, b, smem); break;
+      case 12: detail::mTxmq_rocwmma_core<12, cT>(c, a, b, smem); break;
+      case 16: detail::mTxmq_rocwmma_core<16, cT>(c, a, b, smem); break;
       default:
         if (threadIdx.x == 0)
           printf("mTxmq_rocwmma: unsupported dimk=%u "
@@ -244,16 +244,16 @@ __device__ void mTxmq(mra::size_type dimi, mra::size_type dimj, mra::size_type d
  *   K=16 :   256 elements =  2.0 KB   (direct store path; no smem_c needed)
  */
 template<typename T>
-constexpr mra::size_type mTxmq_shmem_size(mra::size_type K) {
+constexpr size_type mTxmq_shmem_size(size_type K) {
   switch (K) {
-    case  4: return static_cast<mra::size_type>(
-                 mra::detail::mTxmq_rocwmma_shmem_bytes<T,  4>() / sizeof(T));
-    case  8: return static_cast<mra::size_type>(
-                 mra::detail::mTxmq_rocwmma_shmem_bytes<T,  8>() / sizeof(T));
-    case 12: return static_cast<mra::size_type>(
-                 mra::detail::mTxmq_rocwmma_shmem_bytes<T, 12>() / sizeof(T));
-    case 16: return static_cast<mra::size_type>(
-                 mra::detail::mTxmq_rocwmma_shmem_bytes<T, 16>() / sizeof(T));
+    case  4: return static_cast<size_type>(
+                 detail::mTxmq_rocwmma_shmem_bytes<T,  4>() / sizeof(T));
+    case  8: return static_cast<size_type>(
+                 detail::mTxmq_rocwmma_shmem_bytes<T,  8>() / sizeof(T));
+    case 12: return static_cast<size_type>(
+                 detail::mTxmq_rocwmma_shmem_bytes<T, 12>() / sizeof(T));
+    case 16: return static_cast<size_type>(
+                 detail::mTxmq_rocwmma_shmem_bytes<T, 16>() / sizeof(T));
     default: return 0;
   }
 }
@@ -266,9 +266,9 @@ constexpr mra::size_type mTxmq_shmem_size(mra::size_type K) {
  *   K=16 : 1024 threads  ( 16 wavefronts)
  */
 template<typename T>
-constexpr mra::size_type mTxmq_rocwmma_nthreads(mra::size_type K) {
+constexpr size_type mTxmq_rocwmma_nthreads(size_type K) {
   // (K² / 16) wavefronts × 64 threads/wavefront
-  return static_cast<mra::size_type>((K * K / 16) * 64);
+  return static_cast<size_type>((K * K / 16) * 64);
 }
 
 #define MRA_HAVE_MTXMQ 1
