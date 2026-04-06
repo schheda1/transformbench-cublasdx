@@ -20,16 +20,16 @@
  */
 
 template<typename T>
-void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int level) {
+void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int level, int num_streams) {
 
-  Stream streams[4]; // PaRSEC uses 4 streams by default
+  std::vector<Stream> streams(num_streams); // PaRSEC uses 4 streams by default
   T* A, *B, *C, *workspace;
   MALLOC(&A, nfuncs * K * K * K * sizeof(T)); // N x KxKxK tensors
   MALLOC(&B, K * K * sizeof(T)); // KxK matrix
   MALLOC(&C, nfuncs * K * K * K * sizeof(T)); // N x KxKxK tensors
   MALLOC(&workspace, nblocks * K * K * K * sizeof(T)); // per-block scratch
 
-  for (int i = 0; i < 4; ++i) {
+  for (int i = 0; i < num_streams; ++i) {
     CREATE_STREAM(&streams[i]);
   }
 
@@ -87,23 +87,23 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     for (int t = 0; t < ntasks; ++t) {
       switch (level) {
         case 1:
-          submit_transform_bench(nfuncs, nblocks, K, A, B, C, workspace, streams[t%4]);
+          submit_transform_bench(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
         case 2:
-          submit_transform_level2_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%4]);
+          submit_transform_level2_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
         case 3:
-          submit_transform_level3_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%4]);
+          submit_transform_level3_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
         case 4:
-          submit_transform_level4_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%4]);
+          submit_transform_level4_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
         case 5:
-          submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%4]);
+          submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
       }
     }
-    for (int t = 0; t < 4; ++t) {
+    for (int t = 0; t < num_streams; ++t) {
       SYNC_STREAM(streams[t]);
     }
     end = std::chrono::high_resolution_clock::now();
@@ -143,6 +143,7 @@ int main(int argc, char **argv) {
   int K      = opt.parse("-K", 16);   /* number of coefficients */
   int M      = opt.parse("-M", 512);  /* max number of blocks */
   int level  = opt.parse("-l", 0);    /* 0 = auto, 1-5 = explicit */
+  int num_streams = opt.parse("-s", 4); /* number of concurrent streams to use */
 
   /* Legacy -m flag: force level 1 */
   if (opt.exists("-m")) level = 1;
@@ -156,5 +157,5 @@ int main(int argc, char **argv) {
             << " level=" << (level <= 0 ? (MRA_HAVE_CUBLASDX ? 5 : 3) : level)
             << std::endl;
 
-  transform_bench<double>(nreps, ntasks, N, M, K, level);
+  transform_bench<double>(nreps, ntasks, N, M, K, level, num_streams);
 }
