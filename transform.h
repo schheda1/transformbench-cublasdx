@@ -9,6 +9,48 @@
  * Regular transform function using mTxmq
  *****************************************/
 
+#if defined(__HIP_DEVICE_COMPILE__)
+
+
+/**
+ * T'is the version for HIP! Hop!
+ */
+
+template <typename T>
+__device__ void transform(
+    int K,
+    const T* a,
+    const T* b,
+    T*& c,
+    T* workspace)
+{
+  constexpr const int ndim = 3; // fixed for benchmark
+
+  extern __shared__ T b_shm[];
+
+  std::copy_n(b, K * K, b_shm);
+  const T* pc = b_shm;
+  T *t0=workspace, *t1=c;
+  //std::swap(t0,t1);
+    auto tmp = t0;
+    t0 = t1;
+    t1 = tmp;
+  const int dimj = K;
+  int dimi = dimj*dimj;
+  mra::mTxmq(dimi, dimj, dimj, t0, a, pc);
+  for (int n=1; n<ndim; ++n) {
+    mra::mTxmq(dimi, dimj, dimj, t1, t0, pc);
+    auto tmp = t0;
+    t0 = t1;
+    t1 = tmp;
+    //std::swap(t0,t1);
+  }
+  /* no need to synchronize here, mTxmq synchronizes */
+}
+
+
+#else // __HIP_DEVICE_COMPILE__
+
 template <typename T>
 __device__ void transform(
     int K,
@@ -36,6 +78,8 @@ __device__ void transform(
   }
   /* no need to synchronize here, mTxmq synchronizes */
 }
+
+#endif // __HIP_DEVICE_COMPILE__
 
 template<typename T>
 inline
@@ -70,6 +114,10 @@ inline void submit_transform_bench(int nfuncs, int nblocks, int K,
   Dim3 thread_dims = mra::mTxmq_blockdim<T>(K);
   assert(block_size(thread_dims) <= MAX_THREADS_PER_BLOCK);
   auto smem_size = mra::mTxmq_shmem_size<T>(K);
+  size_type K2 = K*K;
+  if (smem_size < K2*sizeof(T)) {
+    smem_size = K2*sizeof(T);
+  }
   CONFIGURE_KERNEL(transform_kernel<T>, smem_size);
   CALL_KERNEL(transform_kernel<T>, std::min(nfuncs, nblocks), thread_dims, smem_size, stream, (nfuncs, K, A, B, C, workspace));
 }
