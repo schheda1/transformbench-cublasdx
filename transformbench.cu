@@ -7,6 +7,7 @@
 #include "transform_level2.h"
 #include "transform_level3.h"
 #include "transform_level4.h"
+#include "transform_level5.h"
 #include "mxm_cublasdx.h"
 #include "util.h"
 
@@ -17,6 +18,8 @@
  *   3 - L3: B in LDS + register accumulation (acc[K] in VGPRs)
  *   4 - L4: AMD MFMA (GFX90A/GFX940) for K=16,32; falls back to L3 elsewhere
  *   5 - L5: cuBLASDx (NVIDIA only, double-buffered block GEMM with Tensor Cores)
+ *   6 - L6: AMD wave-specialized double-buffering (GFX90A/GFX940), 4x4x4 MFMA,
+ *           4 loader+compute pairs, ping-pong A tiles in LDS; falls back to L3
  */
 
 template<typename T>
@@ -39,6 +42,12 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
                  "falling back to level 1\n";
     level = 1;
   }
+#if !defined(__HIP__)
+  if (level == 6) {
+    std::cerr << "Warning: level 6 (wave-mfma) is AMD-only; "
+                 "will fall back to L3 inside the kernel\n";
+  }
+#endif
 
   /* Resolve default level */
   if (level <= 0) {
@@ -46,12 +55,13 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
   }
 
   const char* level_names[] = {
-    "",           /* unused [0] */
-    "L1-global",  /* 1 */
-    "L2-lds_b",   /* 2 */
-    "L3-regblk",  /* 3 */
-    "L4-mfma",    /* 4 */
-    "L5-cublasdx" /* 5 */
+    "",               /* unused [0] */
+    "L1-global",      /* 1 */
+    "L2-lds_b",       /* 2 */
+    "L3-regblk",      /* 3 */
+    "L4-mfma",        /* 4 */
+    "L5-cublasdx",    /* 5 */
+    "L6-wave-mfma",   /* 6 */
   };
 
   /* Print shmem and thread dims for this level */
@@ -78,6 +88,10 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
       smem_size   = transform_cublasdx_shmem_size<T>(K);
       thread_dims = mra::mTxmq_blockdim<T>(K);
       break;
+    case 6:
+      smem_size   = mra::mTxmq_level5_shmem_size<T>(K);
+      thread_dims = mra::mTxmq_level5_blockdim<T>(K);
+      break;
   }
 
   std::chrono::time_point<std::chrono::high_resolution_clock> beg, end;
@@ -100,6 +114,9 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
           break;
         case 5:
           submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
+          break;
+        case 6:
+          submit_transform_level5_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
       }
     }
@@ -155,7 +172,9 @@ int main(int argc, char **argv) {
             << " K=" << K
             << " M=" << M
             << " level=" << (level <= 0 ? (MRA_HAVE_CUBLASDX ? 5 : 3) : level)
+            << (level == 6 ? " (wave-specialized MFMA)" : "")
             << std::endl;
 
   transform_bench<double>(nreps, ntasks, N, M, K, level, num_streams);
 }
+
