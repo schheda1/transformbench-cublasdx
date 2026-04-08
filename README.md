@@ -130,6 +130,69 @@ and the kernel falls back to L3 register blocking within the same binary.
 
 ---
 
+### L6 — Kronecker product GEMM  (`transform_kron.h`)
+
+The three sequential K²×K GEMMs of L1–L4 can be collapsed into a single large
+GEMM by exploiting the separable structure of the 3D transform.  For a K×K×K
+tensor A and transform matrix B, the full operation satisfies:
+
+```
+vec(C) = (B^T ⊗ B^T ⊗ B^T) · vec(A)
+```
+
+where `⊗` is the Kronecker product and `vec()` stacks the tensor into a K³
+column vector.  Expanding the Kronecker product gives a K³×K³ matrix whose
+`(β, α)` entry is:
+
+```
+KronMat[β, α] = B[α%K][β%K]  ·  B[(α/K)%K][(β/K)%K]  ·  B[α/K²][β/K²]
+```
+
+This matrix is built once on the GPU (`build_kron_kernel`) and reused for every
+subsequent batch.  All `nfuncs` tensors are then transformed in a single
+hipBLAS / cuBLAS DGEMM:
+
+```
+C [K³ × nfuncs] = KronMat [K³ × K³] × A [K³ × nfuncs]
+```
+
+#### Concrete dimensions (N = 2048 tensors)
+
+| K  | KronMat shape   | KronMat size | GEMM shape                        | FLOPs (actual) |
+|----|-----------------|--------------|-----------------------------------|----------------|
+|  6 |  216 ×  216     |  0.4 MB      |  [216×216] × [216×2048]           |  1.9 GFlop     |
+|  8 |  512 ×  512     |  2.0 MB      |  [512×512] × [512×2048]           | 10.7 GFlop     |
+| 10 | 1000 × 1000     |  8.0 MB      | [1000×1000] × [1000×2048]         | 41.0 GFlop     |
+| 16 | 4096 × 4096     |128.0 MB      | [4096×4096] × [4096×2048]         |  2.7 TFlop     |
+
+> FLOPs for L6 = 2 · K⁶ · nfuncs (actual GEMM work, not the mathematical
+> minimum of 3 · 2 · K⁴ · nfuncs used by L1–L4).
+
+#### Trade-offs
+
+**Pros**
+- Single API call; large square GEMM fully saturates the memory/compute
+  hierarchy in a way that many tiny K²×K kernels cannot.
+- Faster than L3 for K=6 and K=8 on MI250X despite doing 12–21× more FLOPs,
+  because GPU utilisation jumps from ~5 % to ~80 %.
+
+**Cons**
+- KronMat memory grows as K⁶: impractical beyond K≈16 (128 MB) or K=20
+  (512 MB).
+- Reports higher raw GFlop/s than L1–L4 because it counts the full K⁶ work;
+  the useful mathematical throughput is the same 3·K⁴ per tensor.
+
+#### Correctness
+
+`test_kron.hip` verifies that L6 matches L3 to floating-point precision
+(max relative error < 10⁻¹⁴) for K = 6, 8, 10.
+
+- **Shared memory**: 0 bytes (all work done inside hipBLAS)
+- **Threads**: managed internally by hipBLAS
+- **Supported K**: any value where K⁶ × 8 bytes fits in device memory
+
+---
+
 ### L5 — cuBLASDx  (`mxm_cublasdx.h`)
 
 NVIDIA-only path using the cuBLASDx device-side BLAS library.  Performs a
@@ -168,11 +231,11 @@ make -j
                       -M <int>   # max concurrent blocks (default 512)
                       -n <int>   # task submissions per timing rep (default 500)
                       -r <int>   # timing repetitions (default 5)
-                      -l <int>   # optimization level 1-5 (default: auto)
+                      -l <int>   # optimization level 1-6 (default: auto)
 
 # Sweep all levels for a fixed K
-for L in 1 2 3 4; do
-  ./transformbench_hip -K 16 -N 2048 -n 100 -l $L
+for L in 1 2 3 4 6; do
+  ./transformbench_hip -K 8 -N 2048 -n 100 -l $L
 done
 
 # Sweep all K values at a fixed level
@@ -202,5 +265,7 @@ Transform;level=L3-regblk;nfuncs=2048;nblocks=512;K=16;tasks=100;threads={128,1,
 | `transform_level3.h`    | L3 3D transform wrapper + kernel (K-templated)    |
 | `transform_level4.h`    | L4 3D transform wrapper + kernel (K-templated)    |
 | `transform_cublasdx.h`  | L5 3D transform wrapper + kernel                  |
+| `transform_kron.h`      | L6 Kronecker GEMM (build kernel + hipBLAS call)   |
 | `transformbench.cu`     | Main benchmark driver (`-l` dispatch, timing)     |
+| `test_kron.hip`         | Correctness test: L6 vs L3 element-wise diff      |
 | `util.h`                | Platform macros (CUDA/HIP), `CALL_KERNEL`, etc.   |

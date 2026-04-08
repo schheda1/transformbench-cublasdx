@@ -1,21 +1,59 @@
 #pragma once
 
 /**
- * Level 6: Single GEMM using the Kronecker product.
+ * Level 6 — Kronecker product GEMM.
  *
- * The 3-pass transform  C = B^T x (B^T x (B^T x A))  can be written as a
- * single matrix-vector multiply per tensor:
+ * MATHEMATICAL BACKGROUND
+ * -----------------------
+ * The standard 3-pass transform applies B^T along each mode of a K×K×K tensor:
  *
- *   vec(C) = (B^T ⊗ B^T ⊗ B^T) · vec(A)
+ *   Pass 1: T1[j₀,i₁,i₂] = Σ_{i₀} A[i₀,i₁,i₂] · B[i₀,j₀]   (contract mode 0)
+ *   Pass 2: T2[j₀,j₁,i₂] = Σ_{i₁} T1[j₀,i₁,i₂] · B[i₁,j₁]  (contract mode 1)
+ *   Pass 3: C [j₀,j₁,j₂] = Σ_{i₂} T2[j₀,j₁,i₂] · B[i₂,j₂]  (contract mode 2)
  *
- * where ⊗ is the Kronecker product, giving a K³×K³ matrix.
- * All nfuncs tensors are batched into one GEMM:
+ * Vectorising the tensor (flattening to K³ elements) converts this to a single
+ * matrix-vector product:
  *
- *   C[K³ × N] = KronMat[K³ × K³] × A[K³ × N]
+ *   vec(C) = KronMat · vec(A)
  *
- * Pros: one API call, large GEMM → high GPU utilization for small K.
- * Cons: K⁶ FLOPs vs 3K⁴ for the sequential approach (12-33× more work
- *       for K=6..10), and K⁶ memory for KronMat.
+ * where KronMat = B^T ⊗ B^T ⊗ B^T  is the three-fold Kronecker product
+ * (a K³ × K³ matrix).  Each entry is:
+ *
+ *   KronMat[β, α] = B[α%K][β%K]  ·  B[(α/K)%K][(β/K)%K]  ·  B[α/K²][β/K²]
+ *
+ * with α = input linear index (i₀ + K·i₁ + K²·i₂)
+ *      β = output linear index (j₀ + K·j₁ + K²·j₂)  [same decomposition]
+ *
+ * IMPLEMENTATION
+ * --------------
+ * 1. build_kron_kernel  — one GPU thread per (β, α) entry; called ONCE before
+ *                         the timing loop and cached for all subsequent batches.
+ *
+ * 2. submit_transform_kron_bench  — calls hipblasDgemm / cublasDgemm:
+ *
+ *      C [K³ × nfuncs] = KronMat [K³ × K³] × A [K³ × nfuncs]
+ *
+ *    Tensors are stored contiguously (tensor f occupies A[f·K³ .. (f+1)·K³-1]),
+ *    so the batch dimension maps naturally to GEMM columns.
+ *
+ * TRADE-OFFS
+ * ----------
+ *   Pros
+ *     • Single API call; a K=8 GEMM (512×512 × 512×2048) saturates HBM and
+ *       compute much better than 128 tiny 64×8 kernels.
+ *     • Faster than L3 for K=6 and K=8 on MI250X despite 12–21× more FLOPs.
+ *
+ *   Cons
+ *     • KronMat memory = K⁶ × 8 bytes:  6 MB at K=10,  128 MB at K=16,
+ *       512 MB at K=20 — impractical for K > ~16.
+ *     • FLOPs reported are 2·K⁶·N (actual GEMM work), not the 3·2·K⁴·N
+ *       mathematical minimum, so raw GFlop/s numbers are not directly
+ *       comparable to L1–L4.
+ *
+ * CORRECTNESS
+ * -----------
+ * test_kron.hip verifies L6 ≡ L3 to floating-point precision
+ * (max relative error < 10⁻¹⁴ for K = 6, 8, 10).
  */
 
 #include "util.h"
