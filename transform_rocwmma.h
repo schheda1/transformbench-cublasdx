@@ -90,7 +90,7 @@ __device__ void transform_rocwmma_k(
     return;
   } else if constexpr (K > 16) {
     // Not supported, fallback to Level-3
-    mra::transform_level3_k<T, K>(a, b, c, workspace);
+    transform_level3_k<T, K>(a, b, c, workspace);
     return;
   } else {
 
@@ -104,7 +104,7 @@ __device__ void transform_rocwmma_k(
 
     // load b into a fragment
     FragmentB b_frag;
-    rocwmma::load_matrix_sync(b_frag, b, K, rocwmma::mem_row_major);
+    rocwmma::load_matrix_sync(b_frag, b, K);
 
     /* load A into shared memory */
     for (int idx = thread_id(); idx < K * K; idx += block_size()) {
@@ -128,7 +128,7 @@ __device__ void transform_rocwmma_k(
           //  rocwmma::load_matrix_sync(a_frags[i+1], shmem + (i+1 + wave_id * frags_per_wave) * K, K*K);
           //}
         }
-        rocwmma::fill_fragment(acc_frags[i], 0);
+        rocwmma::fill_fragment(acc_frags[i], static_cast<T>(0));
         rocwmma::mma_sync(acc_frags[i], a_frags[i], b_frag, acc_frags[i]);
       }
 
@@ -138,7 +138,7 @@ __device__ void transform_rocwmma_k(
         for (int i = 0; i < frags_per_wave; ++i)
         {
           rocwmma::store_matrix_sync(c + (i + wave_id * frags_per_wave) * K * K,
-                                    acc_frags[i], K, rocwmma::mem_row_major);
+                                    acc_frags[i], K);
         }
       } else {
         /* wait for all fragments to be loaded from shared memory */
@@ -147,7 +147,7 @@ __device__ void transform_rocwmma_k(
         for (int i = 0; i < frags_per_wave; ++i)
         {
           rocwmma::store_matrix_sync(shmem + (i + wave_id * frags_per_wave) * K * K,
-                                    acc_frags[i], K, rocwmma::mem_row_major);
+                                    acc_frags[i], K);
         }
       }
 
