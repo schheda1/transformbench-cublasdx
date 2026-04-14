@@ -42,7 +42,7 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
 
   /* Resolve default level */
   if (level <= 0) {
-    level = (MRA_HAVE_CUBLASDX) ? 5 : 3;
+    level = 1;
   }
 
   const char* level_names[] = {
@@ -51,7 +51,8 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     "L2-lds_b",   /* 2 */
     "L3-regblk",  /* 3 */
     "L4-mfma",    /* 4 */
-    "L5-cublasdx" /* 5 */
+    "L5-cublasdx", /* 5 */
+    "L6-rocwmma"   /* 6 */
   };
 
   /* Print shmem and thread dims for this level */
@@ -78,6 +79,10 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
       smem_size   = transform_cublasdx_shmem_size<T>(K);
       thread_dims = mra::mTxmq_blockdim<T>(K);
       break;
+    case 6:
+      smem_size   = transform_rocwmma_shmem_size<T>(K);
+      thread_dims = transform_rocwmma_blockdim<T>(K);
+      break;
   }
 
   std::chrono::time_point<std::chrono::high_resolution_clock> beg, end;
@@ -100,6 +105,9 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
           break;
         case 5:
           submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
+          break;
+        case 6:
+          submit_transform_rocwmma_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
       }
     }
