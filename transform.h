@@ -28,7 +28,7 @@ __device__ void transform(
 
   extern __shared__ T b_shm[];
 
-  std::copy_n(b, K * K, b_shm);
+  for (int i = thread_id(); i < K*K; i += block_size()) b_shm[i] = b[i];
   const T* pc = b_shm;
   T *t0=workspace, *t1=c;
   //std::swap(t0,t1);

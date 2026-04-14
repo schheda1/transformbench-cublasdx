@@ -3,7 +3,6 @@
 
 #include "util.h"
 
-#include "mxm_rocwmma.h"
 
 #if __has_include(<blas.hh>)
 #include <blas.hh>
