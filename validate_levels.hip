@@ -132,6 +132,20 @@ void test_level(int level, int K, int nfuncs) {
         max_rel_err = std::max(max_rel_err, rel_err);
     }
 
+    if (max_rel_err >= 1e-10) {
+        std::cout << "FAIL!\n";
+        for (int i = 0; i < nfuncs * K3; ++i) {
+            if (i % K3 == 0) {
+                std::cout << "  Function " << i / K3 << ":\n";
+            }
+            int idx_k = (i % K3) / (K * K);
+            int idx_j = (i % (K * K)) / K;
+            int idx_i = i % K;
+            std::cout << "    [" << idx_k << "][" << idx_j << "][" << idx_i << "]  ref="
+                      << h_Cref[i] << "  test=" << h_Ctest[i] << "\n";
+        }
+    }
+
     std::cout << "K=" << K << " nfuncs=" << nfuncs << " level=" << level
               << "  max_abs_err=" << max_abs_err
               << "  max_rel_err=" << max_rel_err
