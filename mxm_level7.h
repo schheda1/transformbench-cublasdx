@@ -20,27 +20,41 @@
  * A [K×K²] col-major in source memory (global for GEMM 1, LDS for GEMMs 2&3).
  * Wave w handles rows [w*ROWS_PER_WF .. w*ROWS_PER_WF+ROWS_PER_WF) of A^T.
  * MFMA A-operand lane mapping: a_row = tid/4 (0..15), a_k = tid%4 (0..3).
- * The transposed read is direct — no LDS staging for A.
+ * The transposed read is achieved by the MFMA lane mapping — no explicit LDS transpose.
  *
- * --- LDS layout (single buffer, reused across GEMMs) ---
- * One buffer of K*(K²+1) doubles, laid out in padded col-major:
- *   element [k][i]  →  LDS offset  k*(K²+1) + i
- * The +1 padding ensures consecutive k-values land on different LDS banks.
+ * --- Pointer trick ---
+ * After each GEMM, C [K²×K] written row-major to LDS is reinterpreted as A [K×K²]
+ * col-major for the next GEMM via identical flat indices:
+ *   Write: buf[i*K + j]   (C row-major, i ∈ [0,K²), j ∈ [0,K))
+ *   Read:  buf[k*K² + i]  (A col-major, k ∈ [0,K), i ∈ [0,K²))
+ * Since K*K² = K³ = K²*K, both index the same flat buffer — just different shapes.
+ * This is the standard MADNESS mTxmq pointer trick enabling 3D separable transforms.
  *
- * Bank conflict analysis (gfx90a: 32 banks × 4 bytes):
- *   bank_of_double_at_addr = (addr × 2) % 32
- *   Unpadded stride K²=256:  (256×2)%32 = 0  → all k-values alias → 16-way conflict
- *   Padded stride K²+1=257:  (257×2)%32 = 2  → k=0,1,2,3 → banks 0,2,4,6 → conflict-free ✓
- *   Period = 32/gcd(2,32) = 16; K=16 uses k=0..15 → no aliasing.
+ * --- XOR swizzle for LDS bank conflicts ---
+ * gfx90a: 32 banks × 4 bytes.  bank_of_double = (addr_in_doubles × 2) % 32.
+ * K²=256 doubles → stride (256×2)%32 = 0 → all k-values alias → 16-way conflict.
+ *
+ * Fix: apply a consistent XOR swizzle to all LDS addresses (both write and read):
+ *   lds_swizzle(flat) = flat ^ (((flat >> 8) & 3) << 3)
+ *
+ * Write side (flat = i*K + j):
+ *   flat >> 8 = i*K/256 = i/16   →  for K=16, i/16 is exactly the k-group index
+ *   (rows i ∈ [0,16) belong to k=0, rows i ∈ [16,32) to k=1, etc.)
+ *
+ * Read side (flat = k*K² + i):
+ *   flat >> 8 = k*K²/256 = k     →  same swizzle key as write side
+ *
+ * XOR value = (k & 3) * 8 ∈ {0, 8, 16, 24}: scatters k=0..3 to banks {0,8,16,24},
+ * reducing 16-way conflicts to 2-way (theoretical minimum for 64 lanes / 32 banks).
  *
  * --- Single-buffer reuse ---
  * Within gemm7_pass the full A pre-load into a_reg completes before any write to dst.
  * Combined with __syncthreads() between GEMMs, the same LDS buffer is safely reused:
- *   GEMM 1: global A → buf (LDS, padded col-major)
- *   GEMM 2: buf (LDS) → buf (LDS, in-place: reads complete before writes)
- *   GEMM 3: buf (LDS) → C (global, row-major)
+ *   GEMM 1: global A → buf (LDS, row-major + swizzle)
+ *   GEMM 2: buf (LDS) → buf (LDS, in-place, row-major + swizzle)
+ *   GEMM 3: buf (LDS) → C (global, plain row-major, no swizzle)
  *
- * LDS size = K*(K²+1)*sizeof(T).  For K=16: 16×257×8 = 32,864 bytes (~32 KB).
+ * LDS size = K³ * sizeof(T).  For K=16: 16³ × 8 = 32,768 bytes (32 KB).
  *
  * --- GEMM chain: global memory traffic ---
  * GEMM 1: reads A from global.
@@ -60,17 +74,39 @@ namespace detail {
 typedef double mfma_d4 __attribute__((ext_vector_type(4)));
 
 /**
+ * XOR swizzle for LDS bank conflict reduction.
+ *
+ * Applied consistently on both LDS write (flat = i*K + j) and LDS read
+ * (flat = k*K² + i): in both cases flat>>8 == k (for K=16), giving the same
+ * per-k-group XOR offset of (k & 3) * 8.
+ *
+ * Not applied to global memory accesses (GEMM 1 read, GEMM 3 write).
+ */
+__device__ __forceinline__ int lds_swizzle(int flat) {
+    return flat ^ (((flat >> 8) & 3) << 3);
+}
+
+/**
  * One GEMM pass: dst = src^T × B (B already in b_reg[]).
  *
- * SRC_STRIDE   — k-stride for reading src (K² for global, K²+1 for padded LDS)
- * WRITE_ROW_MAJOR — true  → write dst as row-major [K²×K]: dst[i*K + j]
- *                   false → write dst as padded col-major:  dst[j*(K²+1) + i]
+ * SWIZZLE_SRC — true  → apply lds_swizzle to src read address (LDS source)
+ *               false → use flat col-major address as-is  (global source)
+ * SWIZZLE_DST — true  → apply lds_swizzle to dst write address (LDS dest)
+ *               false → use flat row-major address as-is  (global dest)
  *
- * The row-major path is used only for the final GEMM writing to global C.
- * The padded col-major path is used for all LDS intermediate writes, enabling
- * conflict-free reads in the subsequent GEMM.
+ * Read path  (A [K×K²] col-major, standard pointer-trick flat layout):
+ *   flat_src = (s*4 + a_k) * K² + wave_row_offset + t*16 + a_row
+ *   src[SWIZZLE_SRC ? lds_swizzle(flat_src) : flat_src]
+ *
+ * Write path (C [K²×K] row-major):
+ *   flat_dst = (base_row + r) * K + d_col
+ *   dst[SWIZZLE_DST ? lds_swizzle(flat_dst) : flat_dst]
+ *
+ * GEMM 1: <SWIZZLE_SRC=false, SWIZZLE_DST=true>  — global A  → LDS (swizzled)
+ * GEMM 2: <SWIZZLE_SRC=true,  SWIZZLE_DST=true>  — LDS → LDS (in-place, swizzled)
+ * GEMM 3: <SWIZZLE_SRC=true,  SWIZZLE_DST=false> — LDS → global C (plain row-major)
  */
-template <typename T, int K, int SRC_STRIDE, bool WRITE_ROW_MAJOR>
+template <typename T, int K, bool SWIZZLE_SRC, bool SWIZZLE_DST>
 __device__ __forceinline__ void gemm7_pass(
     const T* __restrict__ src,
     T* __restrict__       dst,
@@ -82,24 +118,26 @@ __device__ __forceinline__ void gemm7_pass(
     const int             d_col)
 {
     constexpr int K2           = K * K;
-    constexpr int K2_PAD       = K2 + 1;          /* padded k-stride in LDS     */
     constexpr int ROWS_PER_WF  = K2 / 4;
     constexpr int TILES_PER_WF = ROWS_PER_WF / 16;
     constexpr int NSTEPS       = K / 4;
 
-    /* --- Pre-load A partition into registers (transposed, no LDS staging) ---
-     * src[k * SRC_STRIDE + i] where k = s*4+a_k, i = wave_row_offset+t*16+a_row.
-     * For global src: SRC_STRIDE = K²  (col-major, unpadded).
-     * For LDS src:    SRC_STRIDE = K²+1 (padded col-major, conflict-free). */
+    /* --- Pre-load A partition into registers (transposed in-flight) -----------
+     * A [K×K²] col-major: src[k * K² + i] where k = s*4+a_k, i = wave_row_offset+t*16+a_row.
+     * MFMA lane mapping (a_row=tid/4, a_k=tid%4) achieves the in-flight transpose:
+     * no extra LDS step needed.  XOR swizzle applied when reading from LDS so that
+     * swizzled-write addresses are matched exactly by swizzled-read addresses. */
     double a_reg[TILES_PER_WF][NSTEPS];
     #pragma unroll
     for (int t = 0; t < TILES_PER_WF; ++t)
         #pragma unroll
-        for (int s = 0; s < NSTEPS; ++s)
-            a_reg[t][s] = (double)src[(s * 4 + a_k) * SRC_STRIDE
-                                      + wave_row_offset + t * 16 + a_row];
+        for (int s = 0; s < NSTEPS; ++s) {
+            const int flat_src = (s * 4 + a_k) * K2
+                                 + wave_row_offset + t * 16 + a_row;
+            a_reg[t][s] = (double)src[SWIZZLE_SRC ? lds_swizzle(flat_src) : flat_src];
+        }
 
-    /* --- Issue all MFMAs for all tiles before draining any accumulator ---
+    /* --- Issue all MFMAs for all tiles before draining any accumulator --------
      * Separate AGPR sets per tile allow the matrix core to pipeline tiles
      * while the VALU/LDS units write completed tile results. */
     mfma_d4 acc[TILES_PER_WF];
@@ -114,20 +152,19 @@ __device__ __forceinline__ void gemm7_pass(
             acc[t] = (mfma_d4)__builtin_amdgcn_mfma_f64_16x16x4f64(
                          a_reg[t][s], b_reg[s], (mfma_d4)acc[t], 0, 0, 0);
 
-    /* --- Write results to dst ---
-     * WRITE_ROW_MAJOR=true  (GEMM 3 → global C):
-     *   dst[i*K + j]        row-major [K²×K], matches format expected by other levels.
-     * WRITE_ROW_MAJOR=false (GEMMs 1&2 → LDS buf):
-     *   dst[j*(K²+1) + i]   padded col-major, conflict-free for next GEMM's read. */
+    /* --- Write results to dst -------------------------------------------------
+     * Row-major C [K²×K]: dst[i*K + j].
+     * Pointer trick: the same flat buffer is later read as col-major A [K×K²]:
+     *   A[k][i] = buf[k*K² + i]   (flat index unchanged, shape reinterpreted).
+     * XOR swizzle applied on LDS writes matches the swizzle on subsequent reads.
+     * No swizzle on the final global write (GEMM 3). */
     #pragma unroll
     for (int t = 0; t < TILES_PER_WF; ++t) {
         const int base_row = wave_row_offset + t * 16 + d_row_grp;
         #pragma unroll
         for (int r = 0; r < 4; ++r) {
-            if constexpr (WRITE_ROW_MAJOR)
-                dst[(base_row + r) * K + d_col] = (T)acc[t][r];
-            else
-                dst[d_col * K2_PAD + (base_row + r)] = (T)acc[t][r];
+            const int flat_dst = (base_row + r) * K + d_col;
+            dst[SWIZZLE_DST ? lds_swizzle(flat_dst) : flat_dst] = (T)acc[t][r];
         }
     }
 }
@@ -136,21 +173,20 @@ __device__ __forceinline__ void gemm7_pass(
  * Three-GEMM chain for level 7.
  *
  * B loaded once into VGPRs, resident through all three GEMMs.
- * Single LDS buffer reused across GEMMs (reads complete before writes within each pass).
+ * Single LDS buffer (K³ doubles) reused in-place; XOR swizzle on all LDS I/O.
  *
- *   GEMM 1: gemm7_pass<SRC_STRIDE=K²,  WRITE_ROW_MAJOR=false> — global → LDS
- *   GEMM 2: gemm7_pass<SRC_STRIDE=K²+1, WRITE_ROW_MAJOR=false> — LDS → LDS (in-place)
- *   GEMM 3: gemm7_pass<SRC_STRIDE=K²+1, WRITE_ROW_MAJOR=true>  — LDS → global
+ *   GEMM 1: gemm7_pass<SWIZZLE_SRC=false, SWIZZLE_DST=true>  — global A → LDS
+ *   GEMM 2: gemm7_pass<SWIZZLE_SRC=true,  SWIZZLE_DST=true>  — LDS → LDS (in-place)
+ *   GEMM 3: gemm7_pass<SWIZZLE_SRC=true,  SWIZZLE_DST=false> — LDS → global C
  */
 template <typename T, int K>
 __device__ void mTxmq_level7_mfma(
     T* __restrict__       c,         /* output [K²×K] row-major, global          */
     const T* __restrict__ a,         /* input  [K×K²] col-major, global          */
     const T* __restrict__ b,         /* B      [K×K]  row-major, global          */
-    T*                    buf)       /* LDS scratch: K*(K²+1) doubles            */
+    T*                    buf)       /* LDS scratch: K³ doubles                  */
 {
     constexpr int K2     = K * K;
-    constexpr int K2_PAD = K2 + 1;
     constexpr int NSTEPS = K / 4;
 
     const int tid_block       = (int)threadIdx.x;
@@ -176,26 +212,27 @@ __device__ void mTxmq_level7_mfma(
         b_reg[s] = (double)b[(s * 4 + b_k) * K + b_col];
 
     /* -----------------------------------------------------------------------
-     * GEMM 1: A (global, unpadded K² stride) → buf (LDS, padded col-major)
+     * GEMM 1: A (global, unpadded K² stride) → buf (LDS, row-major + swizzle)
      * ----------------------------------------------------------------------- */
-    gemm7_pass<T, K, K2, false>(a, buf, b_reg,
-                                wave_row_offset, a_row, a_k, d_row_grp, d_col);
+    gemm7_pass<T, K, /*SWIZZLE_SRC=*/false, /*SWIZZLE_DST=*/true>(
+        a, buf, b_reg, wave_row_offset, a_row, a_k, d_row_grp, d_col);
     __syncthreads();
 
     /* -----------------------------------------------------------------------
-     * GEMM 2: buf (LDS, padded K²+1 stride) → buf (LDS, in-place)
+     * GEMM 2: buf (LDS, swizzled) reread as col-major via pointer trick
+     *         → buf (LDS, in-place, row-major + swizzle)
      * Full A pre-load into a_reg completes before any write, so same buffer
      * is safe to overwrite.
      * ----------------------------------------------------------------------- */
-    gemm7_pass<T, K, K2_PAD, false>(buf, buf, b_reg,
-                                    wave_row_offset, a_row, a_k, d_row_grp, d_col);
+    gemm7_pass<T, K, /*SWIZZLE_SRC=*/true, /*SWIZZLE_DST=*/true>(
+        buf, buf, b_reg, wave_row_offset, a_row, a_k, d_row_grp, d_col);
     __syncthreads();
 
     /* -----------------------------------------------------------------------
-     * GEMM 3: buf (LDS, padded K²+1 stride) → c (global, row-major)
+     * GEMM 3: buf (LDS, swizzled) reread as col-major → c (global, row-major)
      * ----------------------------------------------------------------------- */
-    gemm7_pass<T, K, K2_PAD, true>(buf, c, b_reg,
-                                   wave_row_offset, a_row, a_k, d_row_grp, d_col);
+    gemm7_pass<T, K, /*SWIZZLE_SRC=*/true, /*SWIZZLE_DST=*/false>(
+        buf, c, b_reg, wave_row_offset, a_row, a_k, d_row_grp, d_col);
 }
 
 #endif /* AMD MFMA guard */
@@ -232,8 +269,9 @@ __device__ void mTxmq_level7_k(
 
 template <typename T>
 inline size_type mTxmq_level7_shmem_size(int K) {
-    /* Single padded col-major buffer: K columns of (K²+1) doubles each. */
-    return static_cast<size_type>(K * (K * K + 1) * (int)sizeof(T));
+    /* Flat K³ buffer: C [K²×K] row-major reinterpreted as A [K×K²] col-major
+     * via the pointer trick.  No padding needed — swizzle handles bank conflicts. */
+    return static_cast<size_type>(K * K * K * (int)sizeof(T));
 }
 
 template <typename T>
