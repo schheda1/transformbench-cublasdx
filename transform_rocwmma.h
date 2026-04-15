@@ -121,13 +121,13 @@ __device__ void transform_rocwmma_k(
       for (int i = 0; i < frags_per_wave; ++i)
       {
         /* load the current fragment */
-        if (i < frags_per_wave - 1 || frags_per_wave == 1) {
+        //if (i < frags_per_wave - 1 || frags_per_wave == 1) {
           rocwmma::load_matrix_sync(a_frags[i], shmem + (i + wave_id * frags_per_wave) * K, K*K);
           // TODO: is it worth prefetching the next fragment?
           //if constexpr (frags_per_wave > 1) {
           //  rocwmma::load_matrix_sync(a_frags[i+1], shmem + (i+1 + wave_id * frags_per_wave) * K, K*K);
           //}
-        }
+        //}
         rocwmma::fill_fragment(acc_frags[i], static_cast<T>(0));
         rocwmma::mma_sync(acc_frags[i], a_frags[i], b_frag, acc_frags[i]);
       }
