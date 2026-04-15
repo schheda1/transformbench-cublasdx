@@ -7,6 +7,7 @@
 #include "transform_level2.h"
 #include "transform_level3.h"
 #include "transform_level4.h"
+#include "transform_kron.h"
 #include "mxm_cublasdx.h"
 #include "util.h"
 
@@ -17,6 +18,7 @@
  *   3 - L3: B in LDS + register accumulation (acc[K] in VGPRs)
  *   4 - L4: AMD MFMA (GFX90A/GFX940) for K=16,32; falls back to L3 elsewhere
  *   5 - L5: cuBLASDx (NVIDIA only, double-buffered block GEMM with Tensor Cores)
+ *   6 - L6: Single GEMM via K³×K³ Kronecker product (B^T ⊗ B^T ⊗ B^T)
  */
 
 template<typename T>
@@ -51,7 +53,8 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     "L2-lds_b",   /* 2 */
     "L3-regblk",  /* 3 */
     "L4-mfma",    /* 4 */
-    "L5-cublasdx" /* 5 */
+    "L5-cublasdx",/* 5 */
+    "L6-kron"     /* 6 */
   };
 
   /* Print shmem and thread dims for this level */
@@ -78,6 +81,24 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
       smem_size   = transform_cublasdx_shmem_size<T>(K);
       thread_dims = mra::mTxmq_blockdim<T>(K);
       break;
+    case 6:
+      smem_size   = kron_shmem_size<T>(K);
+      thread_dims = kron_blockdim(K);
+      break;
+  }
+
+  /* Level 6: build Kronecker matrix once, before the timing loop */
+  T* KronMat = nullptr;
+  blasHandle_t blas_handle{};
+  if (level == 6) {
+    const int K3 = K * K * K;
+    const size_t kron_bytes = (size_t)K3 * K3 * sizeof(T);
+    std::cout << "L6-kron: allocating " << kron_bytes / (1024*1024.0)
+              << " MB for " << K3 << "x" << K3 << " Kronecker matrix\n";
+    MALLOC(&KronMat, kron_bytes);
+    blasCreate(&blas_handle);
+    build_kron_matrix<T>(K, B, KronMat, streams[0]);
+    SYNC_STREAM(streams[0]);
   }
 
   std::chrono::time_point<std::chrono::high_resolution_clock> beg, end;
@@ -101,6 +122,9 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
         case 5:
           submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
+        case 6:
+          submit_transform_kron_bench<T>(nfuncs, K, A, KronMat, C, blas_handle, streams[t%num_streams]);
+          break;
       }
     }
     for (int t = 0; t < num_streams; ++t) {
@@ -111,7 +135,10 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     /* skip warm-up */
     if (i > 0) {
       auto us = (std::chrono::duration_cast<std::chrono::microseconds>(end - beg).count());
-      uint64_t flops = (uint64_t)ntasks * K * K * K * K * 3 * 2 /* multiply-add */ * nfuncs;
+      /* L6 does one K³×K³ GEMM per task (2·K⁶ FLOPs); others do 3 passes (2·3·K⁴ FLOPs) */
+      uint64_t flops = (level == 6)
+          ? (uint64_t)ntasks * 2 * (uint64_t)K*K*K * (uint64_t)K*K*K * nfuncs
+          : (uint64_t)ntasks * K * K * K * K * 3 * 2 * nfuncs;
       std::cout << "Transform"
                 << ";level=" << level_names[level]
                 << ";nfuncs=" << nfuncs
@@ -125,6 +152,11 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
                 << ";Gflop/s=" << (1e-3 * flops) / us
                 << std::endl;
     }
+  }
+
+  if (level == 6) {
+    blasDestroy(blas_handle);
+    FREE(KronMat);
   }
 
   FREE(A);

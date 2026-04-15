@@ -33,3 +33,10 @@
 
 # custom build environment
 build_vscode*
+build*
+#clangd
+clangd*
+#compile_commands.json
+compile_commands.json
+rocroof/
+

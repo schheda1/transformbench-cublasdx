@@ -83,6 +83,10 @@ if (CMAKE_CUDA_COMPILER)
 endif()
 
 if (CMAKE_HIP_COMPILER)
+  # Ensure ROCm cmake configs (hip, hipblas, etc.) are findable
+  list(APPEND CMAKE_PREFIX_PATH /opt/rocm-6.4.3 /opt/rocm)
+  find_package(hipblas REQUIRED)
+
   #target_link_libraries(libmra INTERFACE mathdx::cublasdx)
   # Set the CUDA architecture
   target_compile_definitions(libmra INTERFACE MRA_HAVE_HIP=1)
@@ -92,9 +96,12 @@ if (CMAKE_HIP_COMPILER)
   # Add the transformbench executable
   add_executable(transformbench_hip transformbench.hip)
 
-  # Link against the MRA interface
-  target_link_libraries(transformbench_hip PUBLIC libmra)
+  # Link against the MRA interface and hipBLAS (for level 6 Kronecker GEMM)
+  target_link_libraries(transformbench_hip PUBLIC libmra roc::hipblas)
 
+  # Correctness test: validate any optimization level against the L1 reference
+  add_executable(validate_levels validate_levels.hip)
+  target_link_libraries(validate_levels PUBLIC libmra roc::hipblas)
 
   if (USE_SUGGEST_LAYOUT)
       # Enable using suggested layout instead of get_layout

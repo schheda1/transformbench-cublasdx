@@ -24,6 +24,8 @@ typedef cudaStream_t Stream;
 
 #define MALLOC(ptr, size) cudaMalloc(ptr, size)
 #define FREE(ptr) cudaFree(ptr)
+#define MEMCPY_H2D(dst, src, size) cudaMemcpy(dst, src, size, cudaMemcpyHostToDevice)
+#define MEMCPY_D2H(dst, src, size) cudaMemcpy(dst, src, size, cudaMemcpyDeviceToHost)
 
 #define CALL_KERNEL(name, block, thread, shared, stream, args)                          \
   do {                                                                                  \
@@ -67,6 +69,8 @@ typedef hipStream_t Stream;
 
 #define MALLOC(ptr, size) (void)hipMalloc(ptr, size)
 #define FREE(ptr) (void)hipFree(ptr)
+#define MEMCPY_H2D(dst, src, size) (void)hipMemcpy(dst, src, size, hipMemcpyHostToDevice)
+#define MEMCPY_D2H(dst, src, size) (void)hipMemcpy(dst, src, size, hipMemcpyDeviceToHost)
 
 #define CALL_KERNEL(name, block, thread, shared, stream, args)                          \
   do {                                                                                  \
