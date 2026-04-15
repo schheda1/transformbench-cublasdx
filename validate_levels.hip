@@ -84,18 +84,19 @@ void test_level(int level, int K, int nfuncs) {
             submit_transform_level4_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
             SYNC_STREAM(stream);
             break;
-#ifdef MRA_HAVE_HIP
         case 5:
             submit_transform_level5_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
             SYNC_STREAM(stream);
             break;
-#else
-        case 5:
-            submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
+        case 6:
+            submit_transform_rocwmma_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
             SYNC_STREAM(stream);
             break;
-#endif
-        case 6: {
+        case 7:
+            submit_transform_level7_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
+            SYNC_STREAM(stream);
+            break;
+        case 8: {
             build_kron_matrix<T>(K, d_B, d_KronMat, stream);
             SYNC_STREAM(stream);
             blasHandle_t blas_handle;
@@ -105,12 +106,6 @@ void test_level(int level, int K, int nfuncs) {
             blasDestroy(blas_handle);
             break;
         }
-#ifdef MRA_HAVE_HIP
-        case 7:
-            submit_transform_level7_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
-            SYNC_STREAM(stream);
-            break;
-#endif
         default:
             std::cerr << "Unknown level " << level << " (valid: 2-7)\n";
             FREE(d_A); FREE(d_B); FREE(d_Cref); FREE(d_Ctest);

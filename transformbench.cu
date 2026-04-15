@@ -7,6 +7,9 @@
 #include "transform_level2.h"
 #include "transform_level3.h"
 #include "transform_level4.h"
+#include "transform_level5.h"
+#include "transform_rocwmma.h"
+#include "transform_level7.h"
 #include "transform_kron.h"
 #include "mxm_cublasdx.h"
 #include "util.h"
@@ -53,8 +56,10 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     "L2-lds_b",   /* 2 */
     "L3-regblk",  /* 3 */
     "L4-mfma",    /* 4 */
-    "L5-cublasdx",/* 5 */
-    "L6-kron"     /* 6 */
+    "L5",/* 5 */
+    "L6-rocwmma",/* 6 */
+    "L7-builtins",/* 7 */
+    "L8-kron"     /* 8 */
   };
 
   /* Print shmem and thread dims for this level */
@@ -78,10 +83,18 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
       thread_dims = mra::mTxmq_level4_blockdim<T>(K);
       break;
     case 5:
-      smem_size   = transform_cublasdx_shmem_size<T>(K);
+      smem_size   = transform_level5_shmem_size<T>(K);
       thread_dims = mra::mTxmq_blockdim<T>(K);
       break;
     case 6:
+      smem_size   = transform_rocwmma_shmem_size<T>(K);
+      thread_dims = transform_rocwmma_blockdim<T>(K);
+      break;
+    case 7:
+      smem_size   = transform_level7_shmem_size<T>(K);
+      thread_dims = transform_level7_blockdim<T>(K);
+      break;
+    case 8:
       smem_size   = kron_shmem_size<T>(K);
       thread_dims = kron_blockdim(K);
       break;
@@ -120,9 +133,15 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
           submit_transform_level4_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
         case 5:
-          submit_transform_cublasdx_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
+          submit_transform_level5_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
           break;
         case 6:
+          submit_transform_rocwmma_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
+          break;
+        case 7:
+          submit_transform_level7_bench<T>(nfuncs, nblocks, K, A, B, C, workspace, streams[t%num_streams]);
+          break;
+        case 8:
           submit_transform_kron_bench<T>(nfuncs, K, A, KronMat, C, blas_handle, streams[t%num_streams]);
           break;
       }
