@@ -8,9 +8,9 @@
  *         2  L2: B cached in LDS
  *         3  L3: register blocking (K-templated)
  *         4  L4: AMD MFMA + L3 fallback
- *         5  L5: rocWMMA transform3d (HIP only)
+ *         5  L5: wave-specialised double-buffering MFMA (HIP only)
  *         6  L6: Kronecker product GEMM (hipBLAS)
- *         7  L7: rocWMMA variant (HIP only)
+ *         7  L7: multi-wave MFMA, B resident in VGPRs (HIP only)
  *   -K  single K value; if omitted sweeps K in {4,6,8,10}
  *   -N  batch size (default 16)
  */
@@ -26,8 +26,8 @@
 #include "transform_level3.h"   // L3
 #include "transform_level4.h"   // L4
 #ifdef MRA_HAVE_HIP
-#  include "transform_level5.h"   // L5 — rocWMMA (HIP only)
-#  include "transform_rocwmma.h"  // L7 — rocWMMA variant (HIP only)
+#  include "transform_level5.h"   // L5 — wave-specialised MFMA (HIP only)
+#  include "transform_level7.h"   // L7 — multi-wave MFMA, B in VGPRs (HIP only)
 #else
 #  include "transform_cublasdx.h" // L5 — cuBLASDx (NVIDIA only)
 #endif
@@ -107,7 +107,7 @@ void test_level(int level, int K, int nfuncs) {
         }
 #ifdef MRA_HAVE_HIP
         case 7:
-            submit_transform_rocwmma_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
+            submit_transform_level7_bench<T>(nfuncs, nblocks, K, d_A, d_B, d_Ctest, d_workspace, stream);
             SYNC_STREAM(stream);
             break;
 #endif
