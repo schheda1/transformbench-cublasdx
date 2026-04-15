@@ -34,7 +34,7 @@ inline int transform_level7_shmem_size(int K) {
 }
 
 template <typename T>
-inline int transform_level7_blockdim(int K) {
+inline Dim3 transform_level7_blockdim(int K) {
     return (int)mra::mTxmq_level7_blockdim<T>(K);
 }
 
