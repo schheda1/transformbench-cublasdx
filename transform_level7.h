@@ -34,6 +34,11 @@ inline int transform_level7_shmem_size(int K) {
 }
 
 template <typename T>
+inline int transform_level7_blockdim(int K) {
+    return (int)mra::mTxmq_level7_blockdim<T>(K);
+}
+
+template <typename T>
 inline void submit_transform_level7_bench(int nfuncs, int nblocks, int K,
                                           const T* A, const T* B, T* C, T* /*workspace*/,
                                           Stream stream)

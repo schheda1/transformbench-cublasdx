@@ -169,7 +169,7 @@ __device__ void transform_rocwmma_k(
 
 /* One kernel binary per K — register pressure is proportional to K, not max(K). */
 template <typename T, int K>
-LAUNCH_BOUNDS(MAX_THREADS_PER_BLOCK, 1)
+LAUNCH_BOUNDS(256, 1)
 __global__ void transform_rocwmma(int nfuncs,
                                   const T* A, const T* B, T* C, T* workspace) {
   constexpr int K2NDIM = K * K * K;
