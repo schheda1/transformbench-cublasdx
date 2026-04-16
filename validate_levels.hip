@@ -31,7 +31,7 @@
 #else
 #  include "transform_cublasdx.h" // L5 — cuBLASDx (NVIDIA only)
 #endif
-#inclue "transform_rocwmma.h"
+#include "transform_rocwmma.h"
 #include "transform_kron.h"     // L6
 
 template <typename T>
