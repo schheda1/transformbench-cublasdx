@@ -100,13 +100,13 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
       break;
   }
 
-  /* Level 6: build Kronecker matrix once, before the timing loop */
+  /* Level 8: build Kronecker matrix once, before the timing loop */
   T* KronMat = nullptr;
   blasHandle_t blas_handle{};
-  if (level == 6) {
+  if (level == 8) {
     const int K3 = K * K * K;
     const size_t kron_bytes = (size_t)K3 * K3 * sizeof(T);
-    std::cout << "L6-kron: allocating " << kron_bytes / (1024*1024.0)
+    std::cout << "L8-kron: allocating " << kron_bytes / (1024*1024.0)
               << " MB for " << K3 << "x" << K3 << " Kronecker matrix\n";
     MALLOC(&KronMat, kron_bytes);
     blasCreate(&blas_handle);
@@ -154,8 +154,8 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     /* skip warm-up */
     if (i > 0) {
       auto us = (std::chrono::duration_cast<std::chrono::microseconds>(end - beg).count());
-      /* L6 does one K³×K³ GEMM per task (2·K⁶ FLOPs); others do 3 passes (2·3·K⁴ FLOPs) */
-      uint64_t flops = (level == 6)
+      /* L8 does one K³×K³ GEMM per task (2·K⁶ FLOPs); others do 3 passes (2·3·K⁴ FLOPs) */
+      uint64_t flops = (level == 8)
           ? (uint64_t)ntasks * 2 * (uint64_t)K*K*K * (uint64_t)K*K*K * nfuncs
           : (uint64_t)ntasks * K * K * K * K * 3 * 2 * nfuncs;
       std::cout << "Transform"
@@ -173,7 +173,7 @@ void transform_bench(int nreps, int ntasks, int nfuncs, int nblocks, int K, int 
     }
   }
 
-  if (level == 6) {
+  if (level == 8) {
     blasDestroy(blas_handle);
     FREE(KronMat);
   }

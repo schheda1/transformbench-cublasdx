@@ -31,6 +31,7 @@
 #else
 #  include "transform_cublasdx.h" // L5 — cuBLASDx (NVIDIA only)
 #endif
+#inclue "transform_rocwmma.h"
 #include "transform_kron.h"     // L6
 
 template <typename T>
@@ -55,7 +56,7 @@ void test_level(int level, int K, int nfuncs) {
     MALLOC(&d_workspace,    nfuncs * K3 * sizeof(T));
 
     T *d_KronMat = nullptr;
-    if (level == 6) {
+    if (level == 8) {
         MALLOC(&d_KronMat, (size_t)K3 * K3 * sizeof(T));
     }
 
