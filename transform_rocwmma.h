@@ -4,9 +4,12 @@
 #include "util.h"
 #include "mxm.h"
 
+#define ROCWMMA_NUM_THREADS 256
+
 #if defined(__HIP_DEVICE_COMPILE__)
 #include <hip/hip_runtime.h>
 #include <rocwmma/rocwmma.hpp>
+
 
 template <size_type K, typename T>
 __device__ void transform_klt16(
@@ -99,7 +102,7 @@ __device__ void transform_rocwmma_k(
     T* shmem = reinterpret_cast<T*>(smem);
 
     int wave_id = thread_id() / WAVE;
-    constexpr int num_waves = (MAX_THREADS_PER_BLOCK / WAVE);
+    constexpr int num_waves = (ROCWMMA_NUM_THREADS / WAVE);
     constexpr int frags_per_wave = (K / num_waves);
 
     // load b into a fragment
@@ -121,14 +124,14 @@ __device__ void transform_rocwmma_k(
       for (int i = 0; i < frags_per_wave; ++i)
       {
         /* load the current fragment */
-        //if (i < frags_per_wave - 1 || frags_per_wave == 1) {
-          const T* c_ptr = (d == 0) ? c : shmem;
+        if (i < frags_per_wave - 1 || frags_per_wave == 1) {
+          const T* c_ptr = (d == 0) ? a : shmem;
           rocwmma::load_matrix_sync(a_frags[i], c_ptr + (i + wave_id * frags_per_wave) * K, K*K);
           // TODO: is it worth prefetching the next fragment?
-          //if constexpr (frags_per_wave > 1) {
-          //  rocwmma::load_matrix_sync(a_frags[i+1], shmem + (i+1 + wave_id * frags_per_wave) * K, K*K);
-          //}
-        //}
+          if constexpr (frags_per_wave > 1) {
+            rocwmma::load_matrix_sync(a_frags[i+1], c_ptr + (i+1 + wave_id * frags_per_wave) * K, K*K);
+          }
+        }
         rocwmma::fill_fragment(acc_frags[i], static_cast<T>(0));
         rocwmma::mma_sync(acc_frags[i], a_frags[i], b_frag, acc_frags[i]);
       }
@@ -169,7 +172,7 @@ __device__ void transform_rocwmma_k(
 
 /* One kernel binary per K — register pressure is proportional to K, not max(K). */
 template <typename T, int K>
-LAUNCH_BOUNDS(256, 1)
+LAUNCH_BOUNDS(ROCWMMA_NUM_THREADS, 1)
 __global__ void transform_rocwmma(int nfuncs,
                                   const T* A, const T* B, T* C, T* workspace) {
   constexpr int K2NDIM = K * K * K;
@@ -185,12 +188,12 @@ __global__ void transform_rocwmma(int nfuncs,
 
 template <typename T>
 inline int transform_rocwmma_shmem_size(int K) {
-  if (K <= 16) {
+  if (K < 16) {
     // For K<=16, we load A and B into shared memory. We need space for A (K^3), B (K^2), and C (K^3).
-    return (K*K*K + K*K);
+    return (K*K*K + K*K) * sizeof(T);
   } else if (K == 16) {
     // For K==16, we hold one copy of A/C in LDS
-    return K*K*K;
+    return K*K*K * sizeof(T);
   } else {
     return transform_level3_shmem_size<T>(K);
   }
@@ -198,7 +201,7 @@ inline int transform_rocwmma_shmem_size(int K) {
 
 template <typename T>
 inline Dim3 transform_rocwmma_blockdim(int K) {
-  return {256, 1, 1};
+  return {ROCWMMA_NUM_THREADS, 1, 1};
 }
 
 template <typename T>
