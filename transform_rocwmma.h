@@ -4,7 +4,7 @@
 #include "util.h"
 #include "mxm.h"
 
-#define ROCWMMA_NUM_THREADS 256
+#define ROCWMMA_NUM_THREADS 1024
 
 #if defined(__HIP_DEVICE_COMPILE__)
 #include <hip/hip_runtime.h>
@@ -110,8 +110,10 @@ __device__ void transform_rocwmma_k(
     rocwmma::load_matrix_sync(b_frag, b, K);
 
     /* load A into shared memory */
-    for (int idx = thread_id(); idx < K * K; idx += block_size()) {
-      shmem[idx] = a[idx];
+    const double4* a2 = reinterpret_cast<const double4*>(a);
+    double4* s2 = reinterpret_cast<double4*>(shmem);
+    for (int idx = thread_id(); idx < (K * K * K) / 4; idx += block_size()) {
+      s2[idx] = a2[idx];
     }
     __syncthreads();
 
@@ -119,13 +121,15 @@ __device__ void transform_rocwmma_k(
     FragmentA a_frags[frags_per_wave];
     FragmentAcc acc_frags[frags_per_wave];
 
+    const T* c_ptr = shmem;
+
     for (int d = 0; d < ndim; ++d) {
       /* load all wavefront fragments */
       for (int i = 0; i < frags_per_wave; ++i)
       {
         /* load the current fragment */
         if (i < frags_per_wave - 1 || frags_per_wave == 1) {
-          const T* c_ptr = (d == 0) ? a : shmem;
+          //const T* c_ptr = (d == 0) ? a : shmem;
           rocwmma::load_matrix_sync(a_frags[i], c_ptr + (i + wave_id * frags_per_wave) * K, K*K);
           // TODO: is it worth prefetching the next fragment?
           if constexpr (frags_per_wave > 1) {
