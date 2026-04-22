@@ -121,7 +121,6 @@ __device__ void transform_rocwmma_k(
     FragmentA a_frags[frags_per_wave];
     FragmentAcc acc_frags[frags_per_wave];
 
-    const T* c_ptr = shmem;
 
     for (int d = 0; d < ndim; ++d) {
       /* load all wavefront fragments */
@@ -129,11 +128,10 @@ __device__ void transform_rocwmma_k(
       {
         /* load the current fragment */
         if (i < frags_per_wave - 1 || frags_per_wave == 1) {
-          //const T* c_ptr = (d == 0) ? a : shmem;
-          rocwmma::load_matrix_sync(a_frags[i], c_ptr + (i + wave_id * frags_per_wave) * K, K*K);
+          rocwmma::load_matrix_sync(a_frags[i], shmem + (i + wave_id * frags_per_wave) * K, K*K);
           // TODO: is it worth prefetching the next fragment?
           if constexpr (frags_per_wave > 1) {
-            rocwmma::load_matrix_sync(a_frags[i+1], c_ptr + (i+1 + wave_id * frags_per_wave) * K, K*K);
+            rocwmma::load_matrix_sync(a_frags[i+1], shmem + (i+1 + wave_id * frags_per_wave) * K, K*K);
           }
         }
         rocwmma::fill_fragment(acc_frags[i], static_cast<T>(0));
@@ -141,22 +139,14 @@ __device__ void transform_rocwmma_k(
       }
 
       /* write back all fragments */
-      if (d == ndim - 1) {
-        /* last iteration, write back to global memory */
-        for (int i = 0; i < frags_per_wave; ++i)
-        {
-          rocwmma::store_matrix_sync(c + (i + wave_id * frags_per_wave) * K * K,
-                                    acc_frags[i], K);
-        }
-      } else {
-        /* wait for all fragments to be loaded from shared memory */
-        rocwmma::synchronize_workgroup();
-        /* write back to shared memory */
-        for (int i = 0; i < frags_per_wave; ++i)
-        {
-          rocwmma::store_matrix_sync(shmem + (i + wave_id * frags_per_wave) * K * K,
-                                    acc_frags[i], K);
-        }
+      T* c_ptr = (d == ndim - 1) ? c : shmem;
+      
+      if (d < ndim -1) rocwmma::synchronize_workgroup();
+      
+      for (int i = 0; i < frags_per_wave; ++i)
+      {
+        rocwmma::store_matrix_sync(c_ptr + (i + wave_id * frags_per_wave) * K * K,
+                                  acc_frags[i], K);
       }
 
       rocwmma::synchronize_workgroup();
